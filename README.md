@@ -78,9 +78,12 @@ android/                    Capacitor Android 容器
     FoliaBridgePlugin.java  CookieManager 网络兼容层
 ```
 
-## 上游
+## 致谢
 
-本工程基于上游桌面版移植，来源：[chthollyphile/folia-major](https://github.com/chthollyphile/folia-major)
+- [Folia 官方源码](https://github.com/chthollyphile/folia-major) —— 本项目的代码基础
+- [folia-android](https://github.com/Timingyyds/folia-android) —— 安卓构建思路参考
+- 所有社区贡献者
+
 
 ## 许可
 
