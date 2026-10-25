@@ -1,6 +1,6 @@
 # Folia for Android（安卓移植版）
 
-Folia 音乐播放器的 **Android 原生移植版**，基于上游桌面版工程完整移植，包名 `ti.folia.ming`，当前版本 **v0.7.21**（versionCode 721）。
+Folia 音乐播放器的 **Android 原生移植版**，基于上游桌面版工程完整移植，包名 `ti.folia.ming`，当前版本 **v0.7.22**（versionCode 721）。
 
 > 本仓库是完整可构建的工程：React/Vite 前端 + Capacitor Android 容器 + 原生 Java 插件，不依赖任何外部服务即可构建。
 
@@ -57,10 +57,7 @@ gradlew.bat assembleDebug
 
 APK 输出：`android/app/build/outputs/apk/debug/app-debug.apk`
 
-- 包名：`ti.folia.ming`
-- versionName：`0.7.21` / versionCode：`721`
-- 调试签名：`android/app/folia-debug.keystore`（alias `folia-debug`，密码 `folia2026`）——固定密钥，覆盖安装不会报签名冲突
-
+- 
 ## 工程结构
 
 ```text
