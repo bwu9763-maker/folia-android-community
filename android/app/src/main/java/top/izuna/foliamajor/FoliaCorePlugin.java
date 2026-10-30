@@ -861,27 +861,51 @@ public class FoliaCorePlugin extends Plugin {
         MediaMetadataRetriever retriever = new MediaMetadataRetriever();
         try {
             retriever.setDataSource(audio.getAbsolutePath());
-            String title = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE);
-            String artist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST);
-            String album = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM);
-            String duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
-            if (title != null && !title.trim().isEmpty()) meta.put("title", title.trim());
-            if (artist != null && !artist.trim().isEmpty()) meta.put("artist", artist.trim());
-            if (album != null && !album.trim().isEmpty()) meta.put("album", album.trim());
-            if (duration != null) {
-                try { meta.put("durationMs", Long.parseLong(duration)); } catch (NumberFormatException ignored) { }
-            }
-            byte[] picture = retriever.getEmbeddedPicture();
-            if (picture != null && picture.length > 0) {
-                String dataUri = downscaleCoverToJpegDataUri(picture, 512);
-                if (dataUri != null) meta.put("coverDataUri", dataUri);
-            }
+            collectImportedMetadata(retriever, meta);
         } catch (Throwable ignored) {
             // WAV/APE 等标签读不出就交给 JS 回退（文件名），导入本身照常完成
         } finally {
             try { retriever.release(); } catch (Throwable ignored) { }
         }
         return meta;
+    }
+
+    /**
+     * MediaStore 版元数据提取（修「扫库歌曲封面全空」）：
+     * 扫描设备音乐库进来的歌 ref 是 MediaStore 数字 id，不是 imported-xxx，旧路径
+     * resolveImportedFile 直接返回 null —— 按需封面提取等于永远空手而归。
+     * 这里按 content URI 走同一套 MMR 提取，标题/封面都给。
+     */
+    private JSObject extractMediaStoreMetadata(Uri audio) {
+        JSObject meta = new JSObject();
+        MediaMetadataRetriever retriever = new MediaMetadataRetriever();
+        try {
+            retriever.setDataSource(getContext(), audio);
+            collectImportedMetadata(retriever, meta);
+        } catch (Throwable ignored) {
+            // 媒体库条目可能已被删除或权限失效，返回空对象即可，不阻断
+        } finally {
+            try { retriever.release(); } catch (Throwable ignored) { }
+        }
+        return meta;
+    }
+
+    private static void collectImportedMetadata(MediaMetadataRetriever retriever, JSObject meta) {
+        String title = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE);
+        String artist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST);
+        String album = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM);
+        String duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
+        if (title != null && !title.trim().isEmpty()) meta.put("title", title.trim());
+        if (artist != null && !artist.trim().isEmpty()) meta.put("artist", artist.trim());
+        if (album != null && !album.trim().isEmpty()) meta.put("album", album.trim());
+        if (duration != null) {
+            try { meta.put("durationMs", Long.parseLong(duration)); } catch (NumberFormatException ignored) { }
+        }
+        byte[] picture = retriever.getEmbeddedPicture();
+        if (picture != null && picture.length > 0) {
+            String dataUri = downscaleCoverToJpegDataUri(picture, 512);
+            if (dataUri != null) meta.put("coverDataUri", dataUri);
+        }
     }
 
     /** 内嵌封面 → 512px JPEG data URI。先探边界再按 2 的幂采样，峰值内存 ~1MB。 */
@@ -1133,14 +1157,24 @@ public class FoliaCorePlugin extends Plugin {
         }
         new Thread(() -> {
             try {
-                if (localAudioServer == null) localAudioServer = new LocalAudioServer(getContext());
-                File directory = localAudioServer.importedAudioDirectory();
-                File target = resolveImportedFile(directory, ref);
-                if (target == null || !target.isFile()) {
+                JSObject meta = null;
+                if (ref.startsWith("imported-")) {
+                    if (localAudioServer == null) localAudioServer = new LocalAudioServer(getContext());
+                    File target = resolveImportedFile(localAudioServer.importedAudioDirectory(), ref);
+                    if (target == null || !target.isFile()) {
+                        call.resolve(new JSObject());
+                        return;
+                    }
+                    meta = extractImportedMetadata(target);
+                } else if (ref.matches("\\d+")) {
+                    // 扫描设备音乐库的歌：ref 是 MediaStore id（LocalAudioServer 同款解析），
+                    // 走 content URI 提取，旧版这里直接空手而归 —— 扫库歌曲封面全空的根因。
+                    Uri uri = Uri.withAppendedPath(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, ref);
+                    meta = extractMediaStoreMetadata(uri);
+                } else {
                     call.resolve(new JSObject());
                     return;
                 }
-                JSObject meta = extractImportedMetadata(target);
                 JSObject result = new JSObject();
                 if (meta.has("coverDataUri")) result.put("coverDataUri", meta.getString("coverDataUri"));
                 if (meta.has("title")) result.put("title", meta.getString("title"));

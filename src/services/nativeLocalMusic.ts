@@ -102,6 +102,9 @@ const getPlugin = (): NativePlugin | null => (
     (window as any).Capacitor?.Plugins?.FoliaNative ?? null
 );
 
+/** 内嵌歌词头部切片上限：ID3v2 / Vorbis 标签连同 USLT 歌词基本都在文件头这个圈内。 */
+const EMBEDDED_LYRICS_HEAD_BYTES = 1024 * 1024;
+
 const titleFromFileName = (fileName: string): string => (
     String(fileName || 'Unknown Song').replace(/\.[^.]+$/, '')
 );
@@ -196,6 +199,42 @@ export const fetchImportedAudioCoverDataUri = async (ref: string): Promise<strin
         return typeof response?.coverDataUri === 'string' && response.coverDataUri.startsWith('data:image/')
             ? response.coverDataUri
             : null;
+    } catch {
+        return null;
+    }
+};
+
+/**
+ * 安卓内嵌歌词提取（修「内嵌歌词在 APP 里不显示」）：
+ *
+ * Java 的 MediaMetadataRetriever 只给标题/歌手/专辑/封面，拿不到 ID3 的 USLT 歌词帧；
+ * 而桌面导入那套 JS 完整解析又只在「原生一个字段都没给出」的小文件回退里才会跑。
+ * 结果：安卓上导入的歌即使内嵌了歌词也永远读不到。
+ *
+ * 这里走 HTTP Range 只取文件头 1MB（ID3v2 / Vorbis 标签连同歌词基本都在头部），
+ * 交给 metadataParser worker 解析 —— 50MB 的 FLAC 也只搬 1MB，不碰 OOM 红线。
+ * 实测（坂本龍一 MP3 + USLT 注入 + 1MB 切片）：标题/专辑/歌词全部可读。
+ * 任何一步失败返回 null，绝不影响导入/匹配主流程。
+ */
+export const extractAndroidEmbeddedLyricsFromHead = async (
+    ref: string,
+): Promise<{ lyrics?: string; translationLyrics?: string } | null> => {
+    if (!ref) return null;
+    const url = await nativeAudioUrlForRef(ref);
+    if (!url) return null;
+    try {
+        const response = await fetch(url, { headers: { Range: `bytes=0-${EMBEDDED_LYRICS_HEAD_BYTES - 1}` } });
+        if (!response.ok) return null;
+        const blob = await response.blob();
+        // 服务器没按 Range 答而回整个文件（非 206）时，超过两倍切片上限就放弃，
+        // 别让大文件整个进内存。
+        if (blob.size === 0 || blob.size > EMBEDDED_LYRICS_HEAD_BYTES * 2) return null;
+        const parsed = await parseEmbeddedMetadataAsync(
+            new File([blob], 'embedded-head.bin', { type: 'audio/mpeg' }),
+            false,
+        );
+        if (!parsed?.lyrics && !parsed?.translationLyrics) return null;
+        return { lyrics: parsed.lyrics, translationLyrics: parsed.translationLyrics };
     } catch {
         return null;
     }
@@ -432,6 +471,25 @@ export const pickAndroidLocalMusic = async (): Promise<LocalSong[]> => {
         } catch (coverError) {
             console.warn('[NativeLocalMusic] Failed to stage embedded cover', fileName, coverError);
         }
+
+        // 内嵌歌词：原生 MMR 拿不到 USLT 帧，这里从回环服务按 Range 取文件头补齐。
+        // 没有就跳过（大多数歌歌词都在线匹配），失败不阻断导入。
+        let embeddedLyrics: string | undefined;
+        let embeddedTranslationLyrics: string | undefined;
+        try {
+            if (!metadata?.lyrics) {
+                const fromHead = await extractAndroidEmbeddedLyricsFromHead(String(track.id));
+                if (fromHead?.lyrics) {
+                    embeddedLyrics = fromHead.lyrics;
+                    embeddedTranslationLyrics = fromHead.translationLyrics;
+                }
+            } else {
+                embeddedLyrics = metadata.lyrics;
+                embeddedTranslationLyrics = metadata.translationLyrics;
+            }
+        } catch (lyricsError) {
+            console.warn('[NativeLocalMusic] Failed to extract embedded lyrics', fileName, lyricsError);
+        }
         songs.push({
             id: `android-imported-${track.id}`,
             fileName,
@@ -457,6 +515,10 @@ export const pickAndroidLocalMusic = async (): Promise<LocalSong[]> => {
                 fallbackAlbum: track.album || '',
             }),
             folderName: ANDROID_IMPORTED_FOLDER_NAME,
+            hasEmbeddedLyrics: Boolean(embeddedLyrics),
+            embeddedLyricsContent: embeddedLyrics,
+            hasEmbeddedTranslationLyrics: Boolean(embeddedTranslationLyrics),
+            embeddedTranslationLyricsContent: embeddedTranslationLyrics,
             hasManualLyricSelection: false,
             noAutoMatch: false,
         });

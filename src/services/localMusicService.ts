@@ -34,6 +34,7 @@ import { isLocalFolderIgnored, normalizeLocalFolderPath, runLocalFolderMutation,
 import {
     copyAndroidLocalAudio,
     deleteAndroidImportedAudio,
+    extractAndroidEmbeddedLyricsFromHead,
     fetchImportedAudioCoverDataUri,
     isAndroidNativeRuntime,
     nativeAudioUrlForRef,
@@ -1358,6 +1359,30 @@ export async function matchLyrics(song: LocalSong): Promise<LyricData | null> {
         return null;
     }
     try {
+        // 安卓扫库/导入歌曲的内嵌歌词懒补齐：原生 MMR 读不到 USLT 帧，导入时也没跑 JS 解析，
+        // 首次匹配时按 Range 取文件头解析一次并写回歌记录 —— 之后的判断自然走得到。
+        if (
+            isAndroidNativeRuntime()
+            && song.nativeAudioRef
+            && !song.hasLocalLyrics
+            && !song.hasEmbeddedLyrics
+            && !song.noAutoMatch
+        ) {
+            const fromHead = await extractAndroidEmbeddedLyricsFromHead(song.nativeAudioRef);
+            if (fromHead?.lyrics) {
+                song.hasEmbeddedLyrics = true;
+                song.embeddedLyricsContent = fromHead.lyrics;
+                if (fromHead.translationLyrics) {
+                    song.hasEmbeddedTranslationLyrics = true;
+                    song.embeddedTranslationLyricsContent = fromHead.translationLyrics;
+                }
+                try {
+                    await applyMatchedMetadata(song.id, {}, { lyricsOnly: true, songPatch: song, skipIfMarkedPureMusic: true });
+                } catch (persistError) {
+                    console.warn('[LocalMusic] Failed to persist embedded lyrics', song.fileName, persistError);
+                }
+            }
+        }
         const catalog = await getLocalLibraryCatalogSnapshot();
         const resolvedMetadata = resolveLocalSongMetadata(song.id, catalog);
         const matchContext = buildLocalSongLyricMatchContext(song, {

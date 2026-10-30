@@ -7,8 +7,8 @@ android {
         applicationId "ti.folia.ming"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 722
-        versionName "0.7.22"
+        versionCode 726
+        versionName "0.7.24"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
